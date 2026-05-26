@@ -130,3 +130,28 @@ func (i *ICoreWebView2Controller) MoveFocus(reason uintptr) error {
 	}
 	return nil
 }
+
+func (i *ICoreWebView2Controller) GetZoomFactor() (float64, error) {
+	var zoomFactor float64
+	var err error
+	_, _, err = i.vtbl.GetZoomFactor.Call(
+		uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(&zoomFactor)),
+	)
+	if err != windows.ERROR_SUCCESS {
+		return 0, err
+	}
+	return zoomFactor, nil
+}
+
+func (i *ICoreWebView2Controller) PutZoomFactor(zoomFactor float64) error {
+	var err error
+	_, _, err = i.vtbl.PutZoomFactor.Call(
+		uintptr(unsafe.Pointer(i)),
+		uintptr(*(*uint64)(unsafe.Pointer(&zoomFactor))),
+	)
+	if err != windows.ERROR_SUCCESS {
+		return err
+	}
+	return nil
+}

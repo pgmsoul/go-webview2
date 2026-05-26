@@ -56,14 +56,17 @@ type webview struct {
 	m          sync.Mutex
 	bindings   map[string]interface{}
 	dispatchq  []func()
+	onclose    func()
 }
 
 type WindowOptions struct {
-	Title  string
-	Width  uint
-	Height uint
-	IconId uint
-	Center bool
+	Title   string
+	Width   uint
+	Height  uint
+	IconId  uint
+	Default bool
+	X       int
+	Y       int
 }
 
 type WebViewOptions struct {
@@ -81,6 +84,9 @@ type WebViewOptions struct {
 	// WindowOptions customizes the window that is created to embed the
 	// WebView2 widget.
 	WindowOptions WindowOptions
+
+	// WM_CLOSE
+	OnClose func(w WebView)
 }
 
 // New creates a new webview in a new window.
@@ -98,6 +104,9 @@ func NewWithOptions(options WebViewOptions) WebView {
 	w := &webview{}
 	w.bindings = map[string]interface{}{}
 	w.autofocus = options.AutoFocus
+	w.onclose = func() {
+		options.OnClose(w)
+	}
 
 	chromium := edge.NewChromium()
 	chromium.MessageCallback = w.msgcb
@@ -238,6 +247,9 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 				w.browser.Focus()
 			}
 		case w32.WMClose:
+			if w.onclose != nil {
+				w.onclose()
+			}
 			_, _, _ = w32.User32DestroyWindow.Call(hwnd)
 		case w32.WMDestroy:
 			w.Terminate()
@@ -304,17 +316,12 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	}
 
 	var posX, posY uint
-	if opts.Center {
-		// get screen size
-		screenWidth, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CXSCREEN)
-		screenHeight, _, _ := w32.User32GetSystemMetrics.Call(w32.SM_CYSCREEN)
-		// calculate window position
-		posX = (uint(screenWidth) - windowWidth) / 2
-		posY = (uint(screenHeight) - windowHeight) / 2
-	} else {
-		// use default position
+	if opts.Default {
 		posX = w32.CW_USEDEFAULT
 		posY = w32.CW_USEDEFAULT
+	} else {
+		posX = uint(opts.X)
+		posY = uint(opts.Y)
 	}
 
 	w.hwnd, _, _ = w32.User32CreateWindowExW.Call(
@@ -478,5 +485,12 @@ func (w *webview) Bind(name string, f interface{}) error {
 		}
 	})()`)
 
+	return nil
+}
+
+func (w *webview) GetChromium() *edge.Chromium {
+	if c, ok := w.browser.(*edge.Chromium); ok {
+		return c
+	}
 	return nil
 }
