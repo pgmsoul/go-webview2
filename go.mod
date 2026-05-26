@@ -1,5 +1,7 @@
-module github.com/jchv/go-webview2
+module github.com/pgmsoul/go-webview2
 
-go 1.16
+go 1.25.0
 
-require golang.org/x/sys v0.0.0-20141223094320-c2a8d2745ffc
+require golang.org/x/sys v0.45.0
+
+require github.com/jchv/go-winloader v0.0.0-20250406163304-c1995be93bd1 // indirect

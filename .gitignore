@@ -13,6 +13,9 @@
 *.test
 *.out
 
+# 配置文件
+config.json
+
 # 依赖管理
 vendor/
 
