@@ -4,10 +4,13 @@
 package edge
 
 import (
+	"fmt"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/pgmsoul/go-webview2/internal/w32"
@@ -27,6 +30,7 @@ type Chromium struct {
 	webResourceRequested  *iCoreWebView2WebResourceRequestedEventHandler
 	acceleratorKeyPressed *ICoreWebView2AcceleratorKeyPressedEventHandler
 	navigationCompleted   *ICoreWebView2NavigationCompletedEventHandler
+	newWindowRequested    *ICoreWebView2NewWindowRequestedEventHandler
 
 	environment *ICoreWebView2Environment
 
@@ -64,6 +68,7 @@ func NewChromium() *Chromium {
 	e.webResourceRequested = newICoreWebView2WebResourceRequestedEventHandler(e)
 	e.acceleratorKeyPressed = newICoreWebView2AcceleratorKeyPressedEventHandler(e)
 	e.navigationCompleted = newICoreWebView2NavigationCompletedEventHandler(e)
+	e.newWindowRequested = newICoreWebView2NewWindowRequestedEventHandler(e)
 	e.permissions = make(map[CoreWebView2PermissionKind]CoreWebView2PermissionState)
 
 	return e
@@ -148,6 +153,27 @@ func (e *Chromium) Eval(script string) {
 	)
 }
 
+// EvalSync 在当前 WebView 线程同步执行 JavaScript 并返回 JSON 编码的结果字符串。
+// 等待 COM 回调时会泵送 Win32 消息，避免在 Dispatch 回调里死锁。
+func (e *Chromium) EvalSync(script string, timeout time.Duration) (string, error) {
+	if e.webview == nil {
+		return "", fmt.Errorf("webview not ready")
+	}
+	h := &evalScriptHandler{ch: make(chan evalScriptOutcome, 1)}
+	cb := newICoreWebView2ExecuteScriptCompletedHandler(h)
+	if err := e.webview.ExecuteScript(script, cb); err != nil {
+		return "", err
+	}
+	out, err := WaitEvalResult(h.ch, timeout)
+	if err != nil {
+		if errors.Is(err, errWaitTimeout) {
+			return "", fmt.Errorf("ExecuteScript timeout")
+		}
+		return "", err
+	}
+	return out.result, out.err
+}
+
 func (e *Chromium) Show() error {
 	return e.controller.PutIsVisible(true)
 }
@@ -216,6 +242,11 @@ func (e *Chromium) CreateCoreWebView2ControllerCompleted(res uintptr, controller
 	_, _, _ = e.webview.vtbl.AddNavigationCompleted.Call(
 		uintptr(unsafe.Pointer(e.webview)),
 		uintptr(unsafe.Pointer(e.navigationCompleted)),
+		uintptr(unsafe.Pointer(&token)),
+	)
+	_, _, _ = e.webview.vtbl.AddNewWindowRequested.Call(
+		uintptr(unsafe.Pointer(e.webview)),
+		uintptr(unsafe.Pointer(e.newWindowRequested)),
 		uintptr(unsafe.Pointer(&token)),
 	)
 
@@ -340,6 +371,14 @@ func (e *Chromium) NavigationCompleted(sender *ICoreWebView2, args *ICoreWebView
 	if e.NavigationCompletedCallback != nil {
 		e.NavigationCompletedCallback(sender, args)
 	}
+	return 0
+}
+
+func (e *Chromium) NewWindowRequested(_ *ICoreWebView2, args *ICoreWebView2NewWindowRequestedEventArgs) uintptr {
+	if uri, err := args.GetUri(); err == nil && uri != "" {
+		e.Navigate(uri)
+	}
+	_ = args.PutHandled(true)
 	return 0
 }
 

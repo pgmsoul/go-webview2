@@ -19,8 +19,9 @@ import (
 )
 
 var (
-	windowContext     = map[uintptr]interface{}{}
-	windowContextSync sync.RWMutex
+	windowContext       = map[uintptr]interface{}{}
+	windowContextSync   sync.RWMutex
+	registeredWndClass  sync.Map
 )
 
 func getWindowContext(wnd uintptr) interface{} {
@@ -51,6 +52,7 @@ type webview struct {
 	mainthread uintptr
 	browser    browser
 	autofocus  bool
+	secondary  bool
 	maxsz      w32.Point
 	minsz      w32.Point
 	m          sync.Mutex
@@ -87,6 +89,9 @@ type WebViewOptions struct {
 
 	// WM_CLOSE
 	OnClose func(w WebView)
+
+	// Secondary 辅窗口：关闭时仅结束本窗口消息循环，不 PostQuitMessage 退出进程。
+	Secondary bool
 }
 
 // New creates a new webview in a new window.
@@ -104,6 +109,7 @@ func NewWithOptions(options WebViewOptions) WebView {
 	w := &webview{}
 	w.bindings = map[string]interface{}{}
 	w.autofocus = options.AutoFocus
+	w.secondary = options.Secondary
 	w.onclose = func() {
 		options.OnClose(w)
 	}
@@ -252,7 +258,11 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 			}
 			_, _, _ = w32.User32DestroyWindow.Call(hwnd)
 		case w32.WMDestroy:
-			w.Terminate()
+			if w.secondary {
+				_, _, _ = w32.User32PostThreadMessageW.Call(w.mainthread, w32.WMQuit, 0, 0)
+			} else {
+				w.Terminate()
+			}
 		case w32.WMGetMinMaxInfo:
 			lpmmi := (*w32.MinMaxInfo)(unsafe.Pointer(lp))
 			if w.maxsz.X > 0 && w.maxsz.Y > 0 {
@@ -293,16 +303,22 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 		icon, _, _ = w32.User32LoadImageW.Call(uintptr(hinstance), uintptr(opts.IconId), 1, 0, 0, w32.LR_DEFAULTSIZE|w32.LR_SHARED)
 	}
 
-	className, _ := windows.UTF16PtrFromString("webview")
-	wc := w32.WndClassExW{
-		CbSize:        uint32(unsafe.Sizeof(w32.WndClassExW{})),
-		HInstance:     hinstance,
-		LpszClassName: className,
-		HIcon:         windows.Handle(icon),
-		HIconSm:       windows.Handle(icon),
-		LpfnWndProc:   windows.NewCallback(wndproc),
+	classStr := "webview"
+	if w.secondary {
+		classStr = "lapintool-browser"
 	}
-	_, _, _ = w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	className, _ := windows.UTF16PtrFromString(classStr)
+	if _, loaded := registeredWndClass.LoadOrStore(classStr, true); !loaded {
+		wc := w32.WndClassExW{
+			CbSize:        uint32(unsafe.Sizeof(w32.WndClassExW{})),
+			HInstance:     hinstance,
+			LpszClassName: className,
+			HIcon:         windows.Handle(icon),
+			HIconSm:       windows.Handle(icon),
+			LpfnWndProc:   windows.NewCallback(wndproc),
+		}
+		_, _, _ = w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	}
 
 	windowName, _ := windows.UTF16PtrFromString(opts.Title)
 

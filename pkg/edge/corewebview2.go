@@ -397,6 +397,27 @@ func (i *ICoreWebView2) AddWebResourceRequestedFilter(uri string, resourceContex
 	}
 	return nil
 }
+
+func (i *ICoreWebView2) ExecuteScript(javascript string, handler *iCoreWebView2ExecuteScriptCompletedHandler) error {
+	u16js, err := windows.UTF16PtrFromString(javascript)
+	if err != nil {
+		return err
+	}
+	var h uintptr
+	if handler != nil {
+		h = uintptr(unsafe.Pointer(handler))
+	}
+	_, _, err = i.vtbl.ExecuteScript.Call(
+		uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(u16js)),
+		h,
+	)
+	if err != windows.ERROR_SUCCESS {
+		return err
+	}
+	return nil
+}
+
 func (i *ICoreWebView2) AddNavigationCompleted(eventHandler *ICoreWebView2NavigationCompletedEventHandler, token *_EventRegistrationToken) error {
 	var err error
 	_, _, err = i.vtbl.AddNavigationCompleted.Call(

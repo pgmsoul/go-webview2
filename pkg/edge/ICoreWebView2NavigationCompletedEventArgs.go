@@ -1,5 +1,11 @@
 package edge
 
+import (
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+)
+
 type _ICoreWebView2NavigationCompletedEventArgsVtbl struct {
 	_IUnknownVtbl
 	GetIsSuccess      ComProc
@@ -14,4 +20,16 @@ type ICoreWebView2NavigationCompletedEventArgs struct {
 func (i *ICoreWebView2NavigationCompletedEventArgs) AddRef() uintptr {
 	r, _, _ := i.vtbl.AddRef.Call()
 	return r
+}
+
+func (i *ICoreWebView2NavigationCompletedEventArgs) GetIsSuccess() (bool, error) {
+	var ok int32
+	_, _, err := i.vtbl.GetIsSuccess.Call(
+		uintptr(unsafe.Pointer(i)),
+		uintptr(unsafe.Pointer(&ok)),
+	)
+	if err != windows.ERROR_SUCCESS {
+		return false, err
+	}
+	return ok != 0, nil
 }

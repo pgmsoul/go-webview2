@@ -28,6 +28,7 @@ var (
 	User32UpdateWindow       = user32.NewProc("UpdateWindow")
 	User32SetFocus           = user32.NewProc("SetFocus")
 	User32GetMessageW        = user32.NewProc("GetMessageW")
+	User32PeekMessageW       = user32.NewProc("PeekMessageW")
 	User32TranslateMessage   = user32.NewProc("TranslateMessage")
 	User32DispatchMessageW   = user32.NewProc("DispatchMessageW")
 	User32DefWindowProcW     = user32.NewProc("DefWindowProcW")
@@ -47,8 +48,7 @@ var (
 )
 
 const (
-	SM_CXSCREEN = 0
-	SM_CYSCREEN = 1
+	PMRemove = 0x0001
 )
 
 const (
@@ -182,13 +182,19 @@ func Utf16PtrToString(p *uint16) string {
 }
 
 func SHCreateMemStream(data []byte) (uintptr, error) {
-	ret, _, err := shlwapiSHCreateMemStream.Call(
-		uintptr(unsafe.Pointer(&data[0])),
-		uintptr(len(data)),
-	)
+	var p uintptr
+	if len(data) > 0 {
+		p = uintptr(unsafe.Pointer(&data[0]))
+	}
+	ret, _, err := shlwapiSHCreateMemStream.Call(p, uintptr(len(data)))
 	if ret == 0 {
 		return 0, err
 	}
 
 	return ret, nil
+}
+
+// SHCreateMemStreamEmpty 创建空 IStream，供 WebView2 CapturePreview 写入。
+func SHCreateMemStreamEmpty() (uintptr, error) {
+	return SHCreateMemStream(nil)
 }
