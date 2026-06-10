@@ -43,6 +43,8 @@ var (
 	User32SetWindowLongPtrW  = user32.NewProc("SetWindowLongPtrW")
 	User32AdjustWindowRect   = user32.NewProc("AdjustWindowRect")
 	User32SetWindowPos       = user32.NewProc("SetWindowPos")
+	User32GetWindowRect      = user32.NewProc("GetWindowRect")
+	User32GetWindowPlacement = user32.NewProc("GetWindowPlacement")
 	User32IsDialogMessage    = user32.NewProc("IsDialogMessage")
 	User32GetAncestor        = user32.NewProc("GetAncestor")
 )
@@ -79,6 +81,7 @@ const (
 const (
 	SWPNoZOrder     = 0x0004
 	SWPNoActivate   = 0x0010
+	SWPNoSize       = 0x0001
 	SWPNoMove       = 0x0002
 	SWPFrameChanged = 0x0020
 )
@@ -154,6 +157,15 @@ type MinMaxInfo struct {
 
 type Point struct {
 	X, Y int32
+}
+
+type WindowPlacement struct {
+	Length           uint32
+	Flags            uint32
+	ShowCmd          uint32
+	PtMinPosition    Point
+	PtMaxPosition    Point
+	RcNormalPosition Rect
 }
 
 type Msg struct {

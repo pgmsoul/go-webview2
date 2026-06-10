@@ -10,7 +10,7 @@ import (
 // The documentation is included for convenience.
 
 // Hint is used to configure window sizing and resizing behavior.
-type Hint int
+type Hint uint32
 
 const (
 	// HintNone specifies that width and height are default size
@@ -25,6 +25,20 @@ const (
 	// HintMax specifies that width and height are maximum bounds
 	HintMax
 )
+
+// HookCallback is the type for the callback function that is executed when a JavaScript hook is called.
+type HookCallback func(chromium *edge.Chromium, args []any)
+
+// WindowPosition holds window position and size.
+type WindowPosition struct {
+	X, Y          int
+	Width, Height int
+	Hints         Hint
+	// NoSize is used in SetPosition, and specifies that width and height will be ignored.
+	NoSize bool
+	// NoMove is used in SetPosition, and specifies that x and y will be ignored.
+	NoMove bool
+}
 
 // WebView is the interface for the webview.
 type WebView interface {
@@ -54,8 +68,17 @@ type WebView interface {
 	// thread.
 	SetTitle(title string)
 
+	// SetPosition updates native window size and position.
+	SetPosition(wp WindowPosition)
+
+	// GetPosition returns the current size and position of the window.
+	GetPosition() (x, y, width, height int)
+
 	// SetSize updates native window size. See Hint constants.
 	SetSize(w int, h int, hint Hint)
+
+	// GetSize returns the current size.
+	GetSize() (width, height int)
 
 	// Navigate navigates webview to the given URL. URL may be a data URI, i.e.
 	// "data:text/text,<html>...</html>". It is often ok not to url-encode it
@@ -67,7 +90,7 @@ type WebView interface {
 	SetHtml(html string)
 
 	// Init injects JavaScript code at the initialization of the new page. Every
-	// time the webview will open a the new page - this initialization code will
+	// time the webview will open a new page - this initialization code will
 	// be executed. It is guaranteed that code is executed before window.onload.
 	Init(js string)
 
@@ -75,6 +98,23 @@ type WebView interface {
 	// also the result of the expression is ignored. Use RPC bindings if you want
 	// to receive notifications about the results of the evaluation.
 	Eval(js string)
+
+	// SetInitHook injects JavaScript code when the page is initialized, and registers a callback function.
+	// When the JavaScript code calls the hook function, the callback function will be executed.
+	// The callback function can accept parameters of any basic type, slice, or map.
+	// For example, when the frontend executes `__hook__(123, "hello")`, the `args` in the Go layer will receive `[123, "hello"]`.
+	//
+	// Parameters:
+	//   js: The JavaScript code to be injected.
+	//   hook: The name of the hook function.
+	//   onHook: The callback function to be executed when the hook function is called.
+	SetInitHook(js, hook string, onHook HookCallback)
+
+	// SetOnLoadHook sets a callback function to be executed when the browser page is initialized.
+	//
+	// Parameters:
+	//   onLoad: The callback function to be executed when the page is loaded.
+	SetOnLoadHook(onLoad func(chromium *edge.Chromium))
 
 	// Bind binds a callback function so that it will appear under the given name
 	// as a global JavaScript function. Internally it uses webview_init().

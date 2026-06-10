@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	windowContext       = map[uintptr]interface{}{}
-	windowContextSync   sync.RWMutex
-	registeredWndClass  sync.Map
+	windowContext      = map[uintptr]interface{}{}
+	windowContextSync  sync.RWMutex
+	registeredWndClass sync.Map
 )
 
 func getWindowContext(wnd uintptr) interface{} {
@@ -63,9 +63,9 @@ type webview struct {
 
 type WindowOptions struct {
 	Title   string
-	Width   uint
-	Height  uint
-	IconId  uint
+	Width   int
+	Height  int
+	IconId  int
 	Default bool
 	X       int
 	Y       int
@@ -110,9 +110,6 @@ func NewWithOptions(options WebViewOptions) WebView {
 	w.bindings = map[string]interface{}{}
 	w.autofocus = options.AutoFocus
 	w.secondary = options.Secondary
-	w.onclose = func() {
-		options.OnClose(w)
-	}
 
 	chromium := edge.NewChromium()
 	chromium.MessageCallback = w.msgcb
@@ -121,6 +118,12 @@ func NewWithOptions(options WebViewOptions) WebView {
 
 	w.browser = chromium
 	w.mainthread, _, _ = w32.Kernel32GetCurrentThreadID.Call()
+	if options.OnClose != nil {
+		w.onclose = func() {
+			options.OnClose(w)
+		}
+	}
+
 	if !w.CreateWithOptions(options.WindowOptions) {
 		return nil
 	}
@@ -425,13 +428,16 @@ func (w *webview) SetTitle(title string) {
 	_, _, _ = w32.User32SetWindowTextW.Call(w.hwnd, uintptr(unsafe.Pointer(&_title[0])))
 }
 
-func (w *webview) SetSize(width int, height int, hints Hint) {
+// SetPosition supports setting the window's position (X, Y) and size (Width, Height) simultaneously or separately.
+func (w *webview) SetPosition(wp WindowPosition) {
 	index := w32.GWLStyle
 	style := w32.GetWindowLong(w.hwnd, index)
+	hints := wp.Hints
+	x, y, width, height := wp.X, wp.Y, wp.Width, wp.Height
 	if hints == HintFixed {
-		style &^= (w32.WSThickFrame | w32.WSMaximizeBox)
+		style &^= w32.WSThickFrame | w32.WSMaximizeBox
 	} else {
-		style |= (w32.WSThickFrame | w32.WSMaximizeBox)
+		style |= w32.WSThickFrame | w32.WSMaximizeBox
 	}
 	w32.SetWindowLong(w.hwnd, index, style)
 
@@ -442,17 +448,77 @@ func (w *webview) SetSize(width int, height int, hints Hint) {
 		w.minsz.X = int32(width)
 		w.minsz.Y = int32(height)
 	} else {
-		r := w32.Rect{}
-		r.Left = 0
-		r.Top = 0
-		r.Right = int32(width)
-		r.Bottom = int32(height)
-		_, _, _ = w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0)
+		// 1. Initialize the base flag: add SWPFrameChanged to ensure that the style modification takes effect immediately.
+		flags := uintptr(w32.SWPNoZOrder | w32.SWPNoActivate | w32.SWPFrameChanged)
+
+		var finalX, finalY, finalWidth, finalHeight uintptr
+
+		// 2. Handle position (X, Y)
+		if wp.NoMove {
+			// The user "only wants to change the size, not the position", add SWPNoMove to tell Windows to ignore X and Y.
+			flags |= w32.SWPNoMove
+		} else {
+			finalX = uintptr(x)
+			finalY = uintptr(y)
+		}
+
+		// 3. Handle size (Width, Height)
+		if wp.NoSize {
+			// The user "only wants to change the position, not the size", add SWPNoSize to tell Windows to ignore width and height.
+			flags |= w32.SWPNoSize
+		} else {
+			// If you want to change the size, still use the original AdjustWindowRect to prevent the title bar from eating up the client area size.
+			r := w32.Rect{}
+			r.Left = 0
+			r.Top = 0
+			r.Right = int32(width)
+			r.Bottom = int32(height)
+			_, _, _ = w32.User32AdjustWindowRect.Call(uintptr(unsafe.Pointer(&r)), w32.WSOverlappedWindow, 0)
+
+			finalWidth = uintptr(r.Right - r.Left)
+			finalHeight = uintptr(r.Bottom - r.Top)
+
+			// If you are also moving the position, you need to add the Left offset calculated by AdjustWindowRect to prevent misalignment.
+			if (flags & w32.SWPNoMove) == 0 {
+				finalX = uintptr(int(finalX) + int(r.Left))
+				finalY = uintptr(int(finalY) + int(r.Top))
+			}
+		}
+
+		// 4. Precisely feed the calculated parameters to SetWindowPos.
 		_, _, _ = w32.User32SetWindowPos.Call(
-			w.hwnd, 0, uintptr(r.Left), uintptr(r.Top), uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top),
-			w32.SWPNoZOrder|w32.SWPNoActivate|w32.SWPNoMove|w32.SWPFrameChanged)
-		w.browser.Resize()
+			w.hwnd, 0,
+			finalX, finalY,
+			finalWidth, finalHeight,
+			flags,
+		)
+
+		// 5. If the size has changed, notify the browser kernel to redraw.
+		if (flags & w32.SWPNoSize) == 0 {
+			w.browser.Resize()
+		}
 	}
+}
+func (w *webview) GetPosition() (px, py, width, height int) {
+	var wp w32.WindowPlacement
+	wp.Length = uint32(unsafe.Sizeof(wp))
+	res, _, _ := w32.User32GetWindowPlacement.Call(w.hwnd, uintptr(unsafe.Pointer(&wp)))
+	if res != 0 {
+		r := wp.RcNormalPosition
+		return int(r.Left), int(r.Top), int(r.Right - r.Left), int(r.Bottom - r.Top)
+	}
+	var r w32.Rect
+	_, _, _ = w32.User32GetWindowRect.Call(w.hwnd, uintptr(unsafe.Pointer(&r)))
+	return int(r.Left), int(r.Top), int(r.Right - r.Left), int(r.Bottom - r.Top)
+}
+
+func (w *webview) SetSize(width int, height int, hints Hint) {
+	w.SetPosition(WindowPosition{Width: width, Height: height, Hints: hints, NoMove: true})
+}
+
+func (w *webview) GetSize() (width, height int) {
+	_, _, width, height = w.GetPosition()
+	return
 }
 
 func (w *webview) Init(js string) {
@@ -509,4 +575,27 @@ func (w *webview) GetChromium() *edge.Chromium {
 		return c
 	}
 	return nil
+}
+
+func (w *webview) SetOnLoadHook(onLoad func(chromium *edge.Chromium)) {
+	w.SetInitHook(`window.addEventListener('load', () => { __onload__(); })`, "__onload__",
+		func(chromium *edge.Chromium, args []any) {
+			if onLoad != nil {
+				onLoad(chromium)
+			}
+		})
+}
+
+func (w *webview) SetInitHook(js, hook string, onHook HookCallback) {
+	w.Bind(hook, func(args ...any) {
+		w.Dispatch(func() {
+			chromium := w.GetChromium()
+			if chromium != nil {
+				if onHook != nil {
+					onHook(chromium, args)
+				}
+			}
+		})
+	})
+	w.Init(js)
 }
