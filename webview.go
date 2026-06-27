@@ -6,10 +6,13 @@ package webview2
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/pgmsoul/go-webview2/internal/w32"
@@ -19,9 +22,9 @@ import (
 )
 
 var (
-	windowContext      = map[uintptr]interface{}{}
-	windowContextSync  sync.RWMutex
-	registeredWndClass sync.Map
+	windowContext     = map[uintptr]interface{}{}
+	windowContextSync sync.RWMutex
+	nextWndClassSeq   atomic.Uint64
 )
 
 func getWindowContext(wnd uintptr) interface{} {
@@ -53,6 +56,8 @@ type webview struct {
 	browser    browser
 	autofocus  bool
 	secondary  bool
+	className  string
+	hinstance  windows.Handle
 	maxsz      w32.Point
 	minsz      w32.Point
 	m          sync.Mutex
@@ -69,6 +74,9 @@ type WindowOptions struct {
 	Default bool
 	X       int
 	Y       int
+	// ClassName 窗口类名前缀；库会为每个窗口追加唯一后缀并独立 RegisterClassExW。
+	// 留空则自动生成。
+	ClassName string
 }
 
 type WebViewOptions struct {
@@ -261,6 +269,14 @@ func wndproc(hwnd, msg, wp, lp uintptr) uintptr {
 			}
 			_, _, _ = w32.User32DestroyWindow.Call(hwnd)
 		case w32.WMDestroy:
+			if w.className != "" {
+				className, _ := windows.UTF16PtrFromString(w.className)
+				_, _, _ = w32.User32UnregisterClassW.Call(
+					uintptr(unsafe.Pointer(className)),
+					uintptr(w.hinstance),
+				)
+				w.className = ""
+			}
 			if w.secondary {
 				_, _, _ = w32.User32PostThreadMessageW.Call(w.mainthread, w32.WMQuit, 0, 0)
 			} else {
@@ -291,36 +307,49 @@ func (w *webview) Create(debug bool, window unsafe.Pointer) bool {
 	return w.CreateWithOptions(WindowOptions{})
 }
 
+func allocWndClassName(prefix string, secondary bool) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		if secondary {
+			prefix = "WebView2Secondary"
+		} else {
+			prefix = "WebView2"
+		}
+	}
+	return fmt.Sprintf("%s_%d", prefix, nextWndClassSeq.Add(1))
+}
+
 func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 	var hinstance windows.Handle
-	_ = windows.GetModuleHandleEx(0, nil, &hinstance)
+	if err := windows.GetModuleHandleEx(0, nil, &hinstance); err != nil {
+		return false
+	}
+	w.hinstance = hinstance
 
 	var icon uintptr
 	if opts.IconId == 0 {
-		// load default icon
 		icow, _, _ := w32.User32GetSystemMetrics.Call(w32.SystemMetricsCxIcon)
 		icoh, _, _ := w32.User32GetSystemMetrics.Call(w32.SystemMetricsCyIcon)
 		icon, _, _ = w32.User32LoadImageW.Call(uintptr(hinstance), 32512, icow, icoh, 0)
 	} else {
-		// load icon from resource
 		icon, _, _ = w32.User32LoadImageW.Call(uintptr(hinstance), uintptr(opts.IconId), 1, 0, 0, w32.LR_DEFAULTSIZE|w32.LR_SHARED)
 	}
 
-	classStr := "webview"
-	if w.secondary {
-		classStr = "lapintool-browser"
-	}
+	classStr := allocWndClassName(opts.ClassName, w.secondary)
+	w.className = classStr
 	className, _ := windows.UTF16PtrFromString(classStr)
-	if _, loaded := registeredWndClass.LoadOrStore(classStr, true); !loaded {
-		wc := w32.WndClassExW{
-			CbSize:        uint32(unsafe.Sizeof(w32.WndClassExW{})),
-			HInstance:     hinstance,
-			LpszClassName: className,
-			HIcon:         windows.Handle(icon),
-			HIconSm:       windows.Handle(icon),
-			LpfnWndProc:   windows.NewCallback(wndproc),
-		}
-		_, _, _ = w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	wc := w32.WndClassExW{
+		CbSize:        uint32(unsafe.Sizeof(w32.WndClassExW{})),
+		HInstance:     hinstance,
+		LpszClassName: className,
+		HIcon:         windows.Handle(icon),
+		HIconSm:       windows.Handle(icon),
+		LpfnWndProc:   windows.NewCallback(wndproc),
+	}
+	atom, _, _ := w32.User32RegisterClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+	if atom == 0 {
+		log.Printf("RegisterClassExW failed for %q", classStr)
+		return false
 	}
 
 	windowName, _ := windows.UTF16PtrFromString(opts.Title)
@@ -357,6 +386,12 @@ func (w *webview) CreateWithOptions(opts WindowOptions) bool {
 		uintptr(hinstance),
 		0,
 	)
+	if w.hwnd == 0 {
+		className, _ := windows.UTF16PtrFromString(classStr)
+		_, _, _ = w32.User32UnregisterClassW.Call(uintptr(unsafe.Pointer(className)), uintptr(hinstance))
+		w.className = ""
+		return false
+	}
 	setWindowContext(w.hwnd, w)
 
 	_, _, _ = w32.User32ShowWindow.Call(w.hwnd, w32.SWShow)

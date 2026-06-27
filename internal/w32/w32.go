@@ -22,6 +22,7 @@ var (
 	User32LoadImageW         = user32.NewProc("LoadImageW")
 	User32GetSystemMetrics   = user32.NewProc("GetSystemMetrics")
 	User32RegisterClassExW   = user32.NewProc("RegisterClassExW")
+	User32UnregisterClassW  = user32.NewProc("UnregisterClassW")
 	User32CreateWindowExW    = user32.NewProc("CreateWindowExW")
 	User32DestroyWindow      = user32.NewProc("DestroyWindow")
 	User32ShowWindow         = user32.NewProc("ShowWindow")
